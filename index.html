@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Texture Factory | 4K Upscaler</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;500;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #09090b;
+            --glass: rgba(255, 255, 255, 0.05);
+            --border: 1px solid rgba(255, 255, 255, 0.1);
+            --accent: #d4af37; /* Gold */
+            --text: #ffffff;
+        }
+
+        body {
+            background-color: var(--bg);
+            background-image: radial-gradient(circle at 50% 0%, #1c1c1e 0%, #000000 80%);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            border: var(--border);
+            border-radius: 24px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+
+        h1 { margin: 0; font-weight: 800; font-size: 28px; letter-spacing: -1px; }
+        p { color: #888; font-size: 14px; margin-top: 5px; margin-bottom: 30px; }
+
+        /* DROP ZONE */
+        .drop-zone {
+            border: 2px dashed rgba(255,255,255,0.2);
+            border-radius: 16px;
+            padding: 40px 20px;
+            cursor: pointer;
+            transition: 0.3s;
+            background: rgba(0,0,0,0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        .drop-zone:hover { border-color: var(--accent); background: rgba(212, 175, 55, 0.05); }
+        .drop-zone.dragover { border-color: #fff; background: rgba(255,255,255,0.1); }
+        
+        .icon { font-size: 40px; margin-bottom: 10px; opacity: 0.8; }
+        #fileInput { display: none; }
+
+        /* AYARLAR */
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 25px;
+            text-align: left;
+        }
+
+        label { font-size: 12px; font-weight: 600; color: #888; display: block; margin-bottom: 8px; }
+        
+        select, input[type="range"] {
+            width: 100%;
+            background: rgba(0,0,0,0.3);
+            border: var(--border);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            outline: none;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+
+        .btn-process {
+            background: linear-gradient(135deg, #d4af37 0%, #b4932a 100%);
+            color: black;
+            border: none;
+            width: 100%;
+            padding: 18px;
+            border-radius: 12px;
+            font-weight: 800;
+            font-size: 16px;
+            margin-top: 25px;
+            cursor: pointer;
+            transition: 0.2s;
+            box-shadow: 0 5px 20px rgba(212, 175, 55, 0.2);
+        }
+        .btn-process:active { transform: scale(0.98); }
+        .btn-process:disabled { background: #333; color: #666; cursor: not-allowed; box-shadow: none; }
+
+        /* DURUM EKRANI */
+        #status { margin-top: 15px; font-size: 13px; font-weight: 600; color: var(--accent); display: none; }
+        
+        canvas { display: none; } /* Gizli İşlemci */
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Texture Factory</h1>
+    <p>Halılar için 4K Upscale & Keskinleştirme Aracı</p>
+
+    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <div class="icon">🖼️</div>
+        <div id="dropText">Resmi Buraya Sürükle veya Seç</div>
+        <input type="file" id="fileInput" accept="image/*">
+    </div>
+
+    <div class="controls">
+        <div>
+            <label>HEDEF ÇÖZÜNÜRLÜK</label>
+            <select id="resolution">
+                <option value="2048">2K (2048px) - Hızlı</option>
+                <option value="3072">3K (3072px) - Dengeli</option>
+                <option value="4096" selected>4K (4096px) - Ultra Kalite</option>
+            </select>
+        </div>
+        <div>
+            <label>KESKİNLİK (SHARPNESS)</label>
+            <input type="range" id="sharpness" min="0" max="100" value="60">
+        </div>
+    </div>
+
+    <button class="btn-process" id="processBtn" onclick="islemBaslat()" disabled>GÖRSEL SEÇİLMEDİ</button>
+    <div id="status">İşleniyor... Lütfen bekleyin.</div>
+</div>
+
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const processBtn = document.getElementById('processBtn');
+    const statusText = document.getElementById('status');
+    const dropText = document.getElementById('dropText');
+    
+    let selectedFile = null;
+
+    // --- SÜRÜKLE BIRAK ---
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        dosyaYakala(e.dataTransfer.files[0]);
+    });
+
+    fileInput.addEventListener('change', (e) => dosyaYakala(e.target.files[0]));
+
+    function dosyaYakala(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        selectedFile = file;
+        dropText.innerText = `Seçildi: ${file.name}`;
+        processBtn.innerText = "KAYDET VE İNDİR (HD)";
+        processBtn.disabled = false;
+        processBtn.style.background = "linear-gradient(135deg, #d4af37 0%, #b4932a 100%)";
+        processBtn.style.color = "black";
+    }
+
+    // --- İŞLEMCİ (MOTOR) ---
+    function islemBaslat() {
+        if (!selectedFile) return;
+
+        statusText.style.display = "block";
+        processBtn.disabled = true;
+        processBtn.innerText = "İŞLENİYOR... (Ağır İşlem)";
+
+        setTimeout(() => {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    upscaleImage(img);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(selectedFile);
+        }, 100);
+    }
+
+    function upscaleImage(img) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Hedef Boyut Hesapla
+        const targetSize = parseInt(document.getElementById('resolution').value);
+        let width = img.width;
+        let height = img.height;
+        
+        // En boy oranını koruyarak büyüt
+        if (width > height) {
+            height = Math.round(height * (targetSize / width));
+            width = targetSize;
+        } else {
+            width = Math.round(width * (targetSize / height));
+            height = targetSize;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        // 1. ADIM: Yüksek Kaliteli Çizim (Bicubic benzeri)
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // 2. ADIM: Keskinleştirme (Sharpening)
+        // Halı dokusu için bu kısım kritik
+        const sharpness = parseInt(document.getElementById('sharpness').value) / 100;
+        if (sharpness > 0) {
+            applySharpening(ctx, width, height, sharpness);
+        }
+
+        // 3. ADIM: İndirme
+        const outputName = "HD_" + selectedFile.name.split('.')[0] + ".jpg";
+        
+        canvas.toBlob((blob) => {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = outputName;
+            link.click();
+
+            // Sıfırla
+            statusText.style.display = "none";
+            processBtn.disabled = false;
+            processBtn.innerText = "TEKRAR İŞLE";
+        }, 'image/jpeg', 0.95); // %95 Kalite
+    }
+
+    // Basit Convolution Filtresi (Sharpening)
+    function applySharpening(ctx, w, h, mix) {
+        const imageData = ctx.getImageData(0, 0, w, h);
+        const data = imageData.data;
+        const width = w;
+        
+        // Sharpen Kernel
+        //  0 -1  0
+        // -1  5 -1
+        //  0 -1  0
+        
+        // Yeni bir buffer oluştur (orijinali bozmamak için)
+        const buff = new Uint8ClampedArray(data);
+
+        // Mix değeriyle etkinin gücünü ayarla
+        const weights = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+        const katman = 4; // R, G, B, A
+
+        for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+                
+                const sy = y;
+                const sx = x;
+                const dstOff = (y * w + x) * 4;
+                
+                let r = 0, g = 0, b = 0;
+
+                // 3x3 Kernel Döngüsü
+                /*
+                   Piksel etrafındaki komşuları toplayıp
+                   ortadaki pikseli belirginleştiriyoruz.
+                */
+                
+                // Basitleştirilmiş manuel sharpen (Performans için)
+                const off = (y * w + x) * 4;
+                const offUp = ((y - 1) * w + x) * 4;
+                const offDown = ((y + 1) * w + x) * 4;
+                const offLeft = (y * w + (x - 1)) * 4;
+                const offRight = (y * w + (x + 1)) * 4;
+
+                // R
+                r = buff[off] * 5 
+                    - buff[offUp] - buff[offDown] - buff[offLeft] - buff[offRight];
+                
+                // G
+                g = buff[off + 1] * 5 
+                    - buff[offUp + 1] - buff[offDown + 1] - buff[offLeft + 1] - buff[offRight + 1];
+
+                // B
+                b = buff[off + 2] * 5 
+                    - buff[offUp + 2] - buff[offDown + 2] - buff[offLeft + 2] - buff[offRight + 2];
+
+                // Orijinal ile Karıştır (Mix)
+                data[off] = data[off] * (1 - mix) + r * mix;
+                data[off + 1] = data[off + 1] * (1 - mix) + g * mix;
+                data[off + 2] = data[off + 2] * (1 - mix) + b * mix;
+            }
+        }
+        ctx.putImageData(imageData, 0, 0);
+    }
+</script>
+
+</body>
+</html>
